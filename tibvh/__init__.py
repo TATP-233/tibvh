@@ -12,19 +12,18 @@ from .lbvh.lbvh import LBVH
 from .geometry import (
     aabb_generator,
     geom_intersection, 
-    mesh_intersection,
     utils
 )
 
 # Version information
 __version__ = "0.1.0"
 __author__ = "TIBVH Contributors"
-__email__ = "contributors@example.com"
+__email__ = "jyf23@mails.tsinghua.edu.cn"
 
 # Package metadata
 __title__ = "tibvh"
 __description__ = "A high-performance Taichi-based Linear BVH implementation for 3D geometry processing"
-__url__ = "https://github.com/yourorg/tibvh"
+__url__ = "https://github.com/TATP-233/tibvh"
 __license__ = "MIT"
 
 # Expose main classes at package level
@@ -40,7 +39,6 @@ __all__ = [
     # Geometry submodules
     "aabb_generator",
     "geom_intersection",
-    "mesh_intersection", 
     "utils",
     
     # Package info

@@ -1,26 +1,26 @@
 from . import aabb_generator
 from . import geom_intersection
-from . import mesh_intersection
 from . import utils
 
 # Import key functions for convenient access
 from .aabb_generator import (
     compute_triangle_aabb,
-    compute_geometry_aabb
+    compute_plane_aabb,
+    compute_sphere_aabb,
+    compute_capsule_aabb,
+    compute_ellipsoid_aabb,
+    compute_cylinder_aabb,
+    compute_box_aabb
 )
 
 from .geom_intersection import (
-    ray_geom_intersection,
-    ray_plane_intersection,
-    ray_sphere_intersection,
-    ray_box_intersection,
-    ray_cylinder_intersection,
-    ray_ellipsoid_intersection,
-    ray_capsule_intersection
-)
-
-from .mesh_intersection import (
-    ray_triangle_distance
+    ray_triangle_distance,
+    ray_plane_distance,
+    ray_sphere_distance,
+    ray_capsule_distance,
+    ray_cylinder_distance,
+    ray_ellipsoid_distance,
+    ray_box_distance,
 )
 
 from .utils import (
@@ -32,21 +32,25 @@ __all__ = [
     # Submodules
     "aabb_generator",
     "geom_intersection", 
-    "mesh_intersection",
     "utils",
     
     # AABB generation functions
     "compute_triangle_aabb",
-    "compute_geometry_aabb",
-    
+    "compute_plane_aabb",
+    "compute_sphere_aabb",
+    "compute_capsule_aabb",
+    "compute_ellipsoid_aabb",
+    "compute_cylinder_aabb",
+    "compute_box_aabb",
+
     # Ray-geometry intersection functions
     "ray_geom_intersection",
-    "ray_plane_intersection", 
-    "ray_sphere_intersection",
-    "ray_box_intersection",
-    "ray_cylinder_intersection",
-    "ray_ellipsoid_intersection",
-    "ray_capsule_intersection",
+    "ray_plane_distance", 
+    "ray_sphere_distance",
+    "ray_box_distance",
+    "ray_cylinder_distance",
+    "ray_ellipsoid_distance",
+    "ray_capsule_distance",
     
     # Mesh intersection functions
     "ray_triangle_distance",
@@ -55,17 +59,3 @@ __all__ = [
     "_transform_ray_to_local",
     "_transform_point_to_world",
 ]
-
-# Geometry type constants for convenience
-GEOMETRY_TYPES = {
-    'PLANE': 0,
-    'SPHERE': 2, 
-    'CAPSULE': 3,
-    'ELLIPSOID': 4,
-    'CYLINDER': 5,
-    'BOX': 6,
-    'MESH': 7
-}
-
-# Add geometry type constants to __all__
-__all__.append("GEOMETRY_TYPES")

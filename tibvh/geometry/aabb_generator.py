@@ -43,44 +43,8 @@ def compute_triangle_aabb(v0: ti.math.vec3, v1: ti.math.vec3, v2: ti.math.vec3) 
     
     return aabb_min, aabb_max
 
-
 @ti.func
-def compute_geometry_aabb(geom_type, position, rotation, size) -> tuple:
-    """
-    计算单个几何体的AABB
-    
-    Args:
-        geom_type: 几何体类型
-        position: 几何体位置
-        rotation: 几何体旋转
-        size: 几何体尺寸
-        
-    Returns:
-        tuple: (aabb_min, aabb_max)
-    """
-    
-    # 初始化默认AABB
-    aabb_min = position - ti.Vector([0.01, 0.01, 0.01])
-    aabb_max = position + ti.Vector([0.01, 0.01, 0.01])
-    
-    # 根据几何体类型计算AABB
-    if geom_type == 0:  # PLANE
-        aabb_min, aabb_max = _compute_plane_aabb(position, rotation, size)
-    elif geom_type == 2:  # SPHERE
-        aabb_min, aabb_max = _compute_sphere_aabb(position, size)
-    elif geom_type == 3:  # CAPSULE
-        aabb_min, aabb_max = _compute_capsule_aabb(position, rotation, size)
-    elif geom_type == 4:  # ELLIPSOID
-        aabb_min, aabb_max = _compute_ellipsoid_aabb(position, rotation, size)
-    elif geom_type == 5:  # CYLINDER
-        aabb_min, aabb_max = _compute_cylinder_aabb(position, rotation, size)
-    elif geom_type == 6:  # BOX
-        aabb_min, aabb_max = _compute_box_aabb(position, rotation, size)
-    
-    return aabb_min, aabb_max
-
-@ti.func
-def _compute_plane_aabb(position: ti.types.vector(3, ti.f32), 
+def compute_plane_aabb(position: ti.types.vector(3, ti.f32), 
                         rotation: ti.types.matrix(3, 3, ti.f32),
                         size: ti.types.vector(3, ti.f32)) -> tuple:
     """计算平面AABB"""
@@ -114,7 +78,7 @@ def _compute_plane_aabb(position: ti.types.vector(3, ti.f32),
     return aabb_min, aabb_max
 
 @ti.func
-def _compute_sphere_aabb(position: ti.types.vector(3, ti.f32),
+def compute_sphere_aabb(position: ti.types.vector(3, ti.f32),
                         size: ti.types.vector(3, ti.f32)) -> tuple:
     """计算球体AABB"""
     radius = size[0]
@@ -126,7 +90,7 @@ def _compute_sphere_aabb(position: ti.types.vector(3, ti.f32),
     return aabb_min, aabb_max
 
 @ti.func
-def _compute_capsule_aabb(position: ti.types.vector(3, ti.f32),
+def compute_capsule_aabb(position: ti.types.vector(3, ti.f32),
                         rotation: ti.types.matrix(3, 3, ti.f32),
                         size: ti.types.vector(3, ti.f32)) -> tuple:
     """计算胶囊体AABB"""
@@ -159,7 +123,7 @@ def _compute_capsule_aabb(position: ti.types.vector(3, ti.f32),
     return aabb_min, aabb_max
 
 @ti.func
-def _compute_ellipsoid_aabb(position: ti.types.vector(3, ti.f32),
+def compute_ellipsoid_aabb(position: ti.types.vector(3, ti.f32),
                             rotation: ti.types.matrix(3, 3, ti.f32),
                             size: ti.types.vector(3, ti.f32)) -> tuple:
     """计算椭球体AABB"""
@@ -188,7 +152,7 @@ def _compute_ellipsoid_aabb(position: ti.types.vector(3, ti.f32),
     return aabb_min, aabb_max
 
 @ti.func
-def _compute_cylinder_aabb(position: ti.types.vector(3, ti.f32),
+def compute_cylinder_aabb(position: ti.types.vector(3, ti.f32),
                             rotation: ti.types.matrix(3, 3, ti.f32),
                             size: ti.types.vector(3, ti.f32)) -> tuple:
     """计算圆柱体AABB"""
@@ -223,7 +187,7 @@ def _compute_cylinder_aabb(position: ti.types.vector(3, ti.f32),
     return aabb_min, aabb_max
 
 @ti.func
-def _compute_box_aabb(position: ti.types.vector(3, ti.f32),
+def compute_box_aabb(position: ti.types.vector(3, ti.f32),
                     rotation: ti.types.matrix(3, 3, ti.f32),
                     size: ti.types.vector(3, ti.f32)) -> tuple:
     """计算盒子AABB"""

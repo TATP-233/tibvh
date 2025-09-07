@@ -28,17 +28,15 @@ class LBVH:
     Attributes:
         aabb_manager (SingleSceneAABB): AABB管理器
         self.n_aabbs (int): AABB数量
-        max_query_results (int): 最大查询结果数量
         max_stack_depth (int): 最大栈深度
     """
     
-    def __init__(self, aabb_manager: AABB, max_query_results_per_aabb: int = 8, profiling: bool = False):
+    def __init__(self, aabb_manager: AABB, profiling: bool = False):
         """
         初始化Linear BVH
         
         Args:
             aabb_manager: AABB管理器
-            max_query_results_per_aabb: 每个AABB的最大查询结果数量
             profiling: 是否启用性能统计
         """
         self.aabb_manager = aabb_manager
@@ -50,7 +48,6 @@ class LBVH:
         self.timing_stats = {} if profiling else None
         
         # 查询相关配置
-        self.max_query_results = min(self.max_aabbs * max_query_results_per_aabb, 0x7FFFFFFF)
         self.max_stack_depth = 64
         
         # AABB中心点和场景边界
@@ -79,10 +76,6 @@ class LBVH:
         self.internal_node_active = ti.field(ti_bool, shape=self.max_aabbs)
         self.internal_node_ready = ti.field(ti_bool, shape=self.max_aabbs)
         
-        # 查询结果存储
-        self.query_result = ti.Vector.field(3, ti.i32, shape=self.max_query_results)  # [batch_id(0), elem_a, elem_b]
-        self.query_result_count = ti.field(ti.i32, shape=())
-       
         # 初始化
         self.reset()
     
@@ -154,7 +147,6 @@ class LBVH:
     
     def reset(self):
         """重置BVH状态"""
-        self.query_result_count[None] = 0
         if self.profiling:
             self.timing_stats = {}
     
