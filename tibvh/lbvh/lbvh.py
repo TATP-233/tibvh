@@ -31,12 +31,14 @@ class LBVH:
         max_stack_depth (int): 最大栈深度
     """
     
-    def __init__(self, aabb_manager: AABB, max_candidates: int = 32, profiling: bool = False):
+    def __init__(self, aabb_manager: AABB, max_candidates: int = 32, max_query_results: int = 4194304, profiling: bool = False):
         """
         初始化Linear BVH
         
         Args:
             aabb_manager: AABB管理器
+            max_candidates: 每条查询射线最多返回的候选数（用于射线收集接口）
+            max_query_results: 点/盒批量查询结果缓冲容量
             profiling: 是否启用性能统计
         """
 
@@ -78,7 +80,12 @@ class LBVH:
         # 树构建状态标记
         self.internal_node_active = ti.field(ti_bool, shape=self.max_aabbs)
         self.internal_node_ready = ti.field(ti_bool, shape=self.max_aabbs)
-        
+
+        # 查询结果缓冲区（存储 batch_id, aabb_id, query_id），单场景 batch_id 固定为 0
+        self.max_query_results = max_query_results
+        self.query_result = ti.Vector.field(2, ti.i32, shape=self.max_query_results)
+        self.query_result_count = ti.field(ti.i32, shape=())
+
         # 初始化
         self.reset()
     
@@ -431,7 +438,62 @@ class LBVH:
 
         return has_more_layers == 0
     
-    @ti.func 
+    @ti.func
+    def query(self, points: ti.template()):
+        """
+        Query the BVH for intersections with the given points.
+        The results are stored in the query_result field.
+        """
+        self.query_result_count[None] = 0
+        overflow = False
+
+        # 约定 points 为 shape (N, 3) 或 1D 的 ti.Vector field，取第 0 维长度
+        n_querys = points.shape[0]
+
+        for i_q in ti.ndrange(n_querys):
+            if self.n_aabbs > 0:
+                # 遍历栈
+                stack = ti.Vector.zero(ti.i32, self.max_stack_depth)
+                stack_depth = 1
+                stack[0] = 0  # 根节点
+
+                while stack_depth > 0:
+                    stack_depth -= 1
+                    node_idx = stack[stack_depth]
+                    # 点在当前节点的AABB内才继续
+                    if self._point_in_node(points[i_q], node_idx):
+                        # 叶子节点：记录 element_id
+                        if self.nodes[node_idx].left == -1 and self.nodes[node_idx].right == -1:
+                            i_a = self.nodes[node_idx].element_id
+                            if i_a >= 0:
+                                idx = ti.atomic_add(self.query_result_count[None], 1)
+                                if idx < self.max_query_results:
+                                    self.query_result[idx] = ti.Vector([i_a, i_q])
+                                else:
+                                    overflow = True
+                        else:
+                            # 压栈两个子节点
+                            if self.nodes[node_idx].right != -1 and stack_depth < self.max_stack_depth:
+                                stack[stack_depth] = self.nodes[node_idx].right
+                                stack_depth += 1
+                            if self.nodes[node_idx].left != -1 and stack_depth < self.max_stack_depth:
+                                stack[stack_depth] = self.nodes[node_idx].left
+                                stack_depth += 1
+
+        return overflow
+
+    @ti.func
+    def _point_in_node(self, p: ti.types.vector(3, ti.f32), node_idx: ti.i32) -> ti.u1:
+        """判断点是否在指定节点的AABB内"""
+        node = self.nodes[node_idx]
+        # 允许一个很小的 epsilon 以避免数值误差导致的边界不含
+        eps = 1e-6
+        cond_x = (p[0] >= node.aabb_min[0] - eps) and (p[0] <= node.aabb_max[0] + eps)
+        cond_y = (p[1] >= node.aabb_min[1] - eps) and (p[1] <= node.aabb_max[1] + eps)
+        cond_z = (p[2] >= node.aabb_min[2] - eps) and (p[2] <= node.aabb_max[2] + eps)
+        return ti.u1(cond_x and cond_y and cond_z)
+
+    @ti.func
     def collect_intersecting_elements(self, 
                                     ray_start: ti.types.vector(3, ti.f32),
                                     ray_direction: ti.types.vector(3, ti.f32)
