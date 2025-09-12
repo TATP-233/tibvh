@@ -4,7 +4,6 @@ import tqdm
 import time
 import argparse
 
-import torch
 import numpy as np
 import taichi as ti
 from tibvh import AABB, LBVH
@@ -23,7 +22,16 @@ from outline_occupy import filter_surface_points_tile
 
 #######################################################################################
 @ti.func
-def gaussian_density(pos, gaussian):
+def opacity_func(x):
+    # 自己随便实现了一个，可以试试换成别的
+    # 将透明的物体尽量映射到 0
+
+    # return x
+    return x ** 2
+    # return x ** 4
+
+@ti.func
+def gaussian_density(pos:ti.types.vector(3, ti.f32), gaussian:Gaussian):
     """
     计算单个3D高斯体在指定位置的密度值
     """
@@ -34,7 +42,7 @@ def gaussian_density(pos, gaussian):
     density = ti.exp(exponent) / norm_factor
     # return density --- IGNORE ---
     # 计算不透明度加权密度
-    density_opc = density * gaussian.opacity
+    density_opc = density * opacity_func(gaussian.opacity)
     return density_opc
 #######################################################################################
 
@@ -43,13 +51,12 @@ if __name__ == "__main__":
     parser.add_argument('ply_file', type=str, help='Input PLY file path')
     parser.add_argument('-o', '--output', type=str, default=None, help='Output folder path')
     parser.add_argument('-c', '--cutoff', type=float, default=3.0, help='Cutoff ratio for Gaussian influence')
-    parser.add_argument('-r', '--resolution', type=float, default=0.033, help='Voxel resolution, meter')
-    parser.add_argument('-d', '--density-threshold', type=float, default=3.0, help='Density threshold for filtering')
-    parser.add_argument('-bg', '--grid-batch', type=int, default=24, help='Grid points batch size (log2)')
-    parser.add_argument('-bq', '--max-query-results', type=int, default=28, help='Max query results for LBVH (log2)')
+    parser.add_argument('-r', '--resolution', type=float, default=0.02, help='Voxel resolution, meter')
+    parser.add_argument('-d', '--density-threshold', type=float, default=1.0, help='Density threshold for filtering')
+    parser.add_argument('-bg', '--grid-batch', type=int, default=25, help='Grid points batch size (log2)')
+    parser.add_argument('-bq', '--max-query-results', type=int, default=29, help='Max query results for LBVH (log2)')
     parser.add_argument('--tile', type=int, default=64, help='Tile size B')
     args = parser.parse_args()
-
 
     ply_file = args.ply_file
     output_path = args.output if args.output else os.path.join(os.path.dirname(ply_file), "output")
@@ -65,6 +72,7 @@ if __name__ == "__main__":
     start_time = time.time()
     gaussians, _ = load_gaussians(ply_file, cutoff=scale_cutoff_ratio, verbose=True)
     print(f"加载高斯体时间: {(time.time()-start_time)*1e3:.2f} 毫秒")
+    gaussian_points_np = gaussians.position.to_numpy()
 
     n_gaussians = gaussians.shape[0]
     aabb_manager = AABB(max_n_aabbs=n_gaussians)
@@ -83,8 +91,9 @@ if __name__ == "__main__":
     ti.sync()     # 确保GPU操作完成
     print(f"LBVH 构建时间: {(time.time()-start_time)*1e3:.2f} 毫秒")
 
-    aabb_min = lbvh.nodes[0].aabb_min.to_numpy()
-    aabb_max = lbvh.nodes[0].aabb_max.to_numpy()
+    aabb_min = gaussian_points_np.min(axis=0) - resolution
+    aabb_max = gaussian_points_np.max(axis=0) + resolution
+    print(aabb_min, aabb_max)
 
     aabb_size = aabb_max - aabb_min
     print("AABB Min:", aabb_min)
@@ -154,7 +163,6 @@ if __name__ == "__main__":
 
         densities_batch = densities_ti.to_numpy()[:current_batch_size]
         densities_all[start_idx:end_idx] = densities_batch
-
     print(f"处理时间: {(time.time()-start_time):.2f} 秒")
 
     mask = densities_all > density_threshold
@@ -168,14 +176,17 @@ if __name__ == "__main__":
     np.save(output_file, grids_with_density)
     print(f"保存网格数据到 {output_file}")
 
+    merged_points = np.concatenate([gaussian_points_np, m_grid_points], axis=0)
+
+    start_time = time.time()
     surface_pts = filter_surface_points_tile(
-        m_grid_points,
+        merged_points, # m_grid_points
         resolution=args.resolution,
         aabb_min=aabb_min,
         grid_size=grid_size,
         tile_size=args.tile,
-        use_halo=True,
     )
+    print(f"提取表面点: {(time.time()-start_time)*1e3:.2f} 毫秒")
 
     print(f"提取表面点数: {surface_pts.shape[0]} / {m_grid_points.shape[0]}")
     output_file = os.path.join(output_path, "surface_points.npy")
