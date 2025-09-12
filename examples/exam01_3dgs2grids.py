@@ -180,52 +180,14 @@ if __name__ == "__main__":
 
     merged_points = np.concatenate([gaussian_points_np, m_grid_points], axis=0)
     ##############################################################
-    # 分片策略：沿 z 轴将 merged_points 均匀分成 N 份，相邻分片在 z 方向重叠 3×resolution
-    # N 依据 z 方向 tile 数 Tz 估算：每片约含 4 个 z-tiles
     start_time = time.time()
-    B = int(args.tile)
-    gz = int(grid_size[2])
-    Tz = (gz + B - 1) // B
-    tiles_per_slice = 1
-    N = max(1, int(np.ceil(Tz / tiles_per_slice)))
-
-    z_vals = merged_points[:, 2]
-    zmin_all = float(z_vals.min())
-    zmax_all = float(z_vals.max())
-    overlap = 3.0 * float(resolution)
-
-    surface_parts = []
-    for k in tqdm.trange(N):
-        base_z0 = zmin_all + (zmax_all - zmin_all) * (k / N)
-        base_z1 = zmin_all + (zmax_all - zmin_all) * ((k + 1) / N)
-        z0 = max(zmin_all, base_z0 - overlap)
-        z1 = min(zmax_all, base_z1 + overlap)
-        mask_k = (z_vals >= z0) & (z_vals <= z1)
-        part_pts = merged_points[mask_k]
-        if part_pts.shape[0] == 0:
-            continue
-        sub_surface = filter_surface_points_tile(
-            part_pts,
-            resolution=args.resolution,
-            aabb_min=aabb_min,
-            grid_size=grid_size,
-            tile_size=args.tile,
-        )
-        if sub_surface is not None and sub_surface.size > 0:
-            surface_parts.append(sub_surface)
-
-    if len(surface_parts) == 0:
-        surface_pts = np.empty((0, 3), dtype=np.float32)
-    else:
-        surface_concat = np.concatenate(surface_parts, axis=0)
-        # 拼接后的整体再执行一次全局过滤，去除跨分片边界处的内部点/离散点
-        surface_pts = filter_surface_points_tile(
-            surface_concat,
-            resolution=args.resolution,
-            aabb_min=aabb_min,
-            grid_size=grid_size,
-            tile_size=args.tile,
-        )
+    surface_pts = filter_surface_points_tile(
+        merged_points, # m_grid_points
+        resolution=args.resolution,
+        aabb_min=aabb_min,
+        grid_size=grid_size,
+        tile_size=args.tile,
+    )
     ##############################################################
     print(f"提取表面点: {(time.time()-start_time)*1e3:.2f} 毫秒")
 
