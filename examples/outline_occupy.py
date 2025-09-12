@@ -1,6 +1,9 @@
 import os
+import time
+import tqdm
 import argparse
 import numpy as np
+
 import torch
 import taichi as ti
 
@@ -10,13 +13,10 @@ def filter_surface_points_tile(
     aabb_min: np.ndarray,
     grid_size: np.ndarray,
     tile_size: int = 64,
+    use_halo: bool = True,
 ):
     """
-        使用三维瓦片 + halo 的GPU算法，删除内部点并移除离散点，仅保留外部轮廓点。
-        规则：
-            - 内部点：六个轴向邻居(±x,±y,±z)全存在 -> 删除
-            - 离散点：六个轴向邻居一个都不存在 -> 删除
-            - 其余为外部轮廓点 -> 保留
+    使用三维瓦片 + halo 的GPU算法，删除内部点，仅保留外部点（六邻域缺失即外部）。
 
     参数:
         m_grid_points: (N, 3) float32，体素中心坐标
@@ -24,11 +24,14 @@ def filter_surface_points_tile(
         aabb_min: (3,) float32，网格AABB最小点
         grid_size: (3,) int32，总体素尺寸 (gx, gy, gz)
         tile_size: 每个瓦片边长 B（建议 64/96）
+        use_halo: 是否装载六面 halo 保证跨瓦片邻居正确
+        device: 'cuda' 或 'cpu'（建议 'cuda'）
 
     返回:
         surface_points: (M, 3) float32，仅外部点
     """
 
+    device: str = 'cuda',
     assert m_grid_points.ndim == 2 and m_grid_points.shape[1] == 3
 
     # 输入 -> Torch (GPU) 加速离散化与分桶
@@ -94,9 +97,9 @@ def filter_surface_points_tile(
     out_points = ti.Vector.field(3, dtype=ti.f32, shape=N_in)  # 仅 in-grid 部分的上限
     out_count = ti.field(dtype=ti.i32, shape=())
 
-    # 局部占据体（本块+halo）：单个tile缓冲 (B+2)^3，逐tile复用
-    occ = ti.field(dtype=ti.u1, shape=(B + 2, B + 2, B + 2))
-    interior = ti.field(dtype=ti.u1, shape=(B + 2, B + 2, B + 2))
+    # 局部占据体（本块+halo）：(B+2)^3
+    occ = ti.field(dtype=ti.u1, shape=(num_tiles, B + 2, B + 2, B + 2))
+    interior = ti.field(dtype=ti.u1, shape=(num_tiles, B + 2, B + 2, B + 2))
 
     # 常量参数
     Tx_i, Ty_i, Tz_i = int(Tx), int(Ty), int(Tz)
@@ -127,11 +130,11 @@ def filter_surface_points_tile(
     @ti.kernel
     def process_all_tiles():
         out_count[None] = 0
-        for i_tile in range(num_tiles):
+        for i_tile in ti.ndrange(num_tiles):
             # 清零占据
             for x, y, z in ti.ndrange(B + 2, B + 2, B + 2):
-                occ[x, y, z] = False
-                interior[x, y, z] = False
+                occ[i_tile, x, y, z] = False
+                interior[i_tile, x, y, z] = False
 
             # 当前 tile 尺寸（最后一块可能不足 B）
             tc = tile_coords_from_id(i_tile)
@@ -153,11 +156,11 @@ def filter_surface_points_tile(
                 ly = v[1] + 1
                 lz = v[2] + 1
                 if lx >= 1 and lx <= size_x and ly >= 1 and ly <= size_y and lz >= 1 and lz <= size_z:
-                    occ[lx, ly, lz] = True
+                    occ[i_tile, lx, ly, lz] = True
 
-            if ti.static(1):
+            if ti.static(use_halo):
                 # 六个方向装载 halo：仅边界一层
-                # -x 邻：当前的 occ[0, :, :] 由左侧 tile 的 li==B-1 填充
+                # -x 邻：当前的 occ[i_tile, 0, :, :] 由左侧 tile 的 li==B-1 填充
                 if tx > 0:
                     tn = tile_id_from_coords(tx - 1, ty, tz)
                     n0 = ti.i32(tile_offsets[tn])
@@ -168,8 +171,8 @@ def filter_surface_points_tile(
                             ly2 = v[1] + 1
                             lz2 = v[2] + 1
                             if ly2 >= 1 and ly2 <= size_y and lz2 >= 1 and lz2 <= size_z:
-                                occ[0, ly2, lz2] = True
-                # +x 邻：右侧 tile 的 li==0 -> occ[B+1, :, :]
+                                occ[i_tile, 0, ly2, lz2] = True
+                # +x 邻：右侧 tile 的 li==0 -> occ[i_tile, B+1, :, :]
                 if tx + 1 < Tx_i:
                     tn = tile_id_from_coords(tx + 1, ty, tz)
                     n0 = ti.i32(tile_offsets[tn])
@@ -180,8 +183,8 @@ def filter_surface_points_tile(
                             ly2 = v[1] + 1
                             lz2 = v[2] + 1
                             if ly2 >= 1 and ly2 <= size_y and lz2 >= 1 and lz2 <= size_z:
-                                occ[size_x + 1, ly2, lz2] = True
-                # -y 邻：lj==B-1 -> occ[:,0,:]
+                                occ[i_tile, size_x + 1, ly2, lz2] = True
+                # -y 邻：lj==B-1 -> occ[i_tile, :,0,:]
                 if ty > 0:
                     tn = tile_id_from_coords(tx, ty - 1, tz)
                     n0 = ti.i32(tile_offsets[tn])
@@ -192,8 +195,8 @@ def filter_surface_points_tile(
                             lx2 = v[0] + 1
                             lz2 = v[2] + 1
                             if lx2 >= 1 and lx2 <= size_x and lz2 >= 1 and lz2 <= size_z:
-                                occ[lx2, 0, lz2] = True
-                # +y 邻：lj==0 -> occ[:, B+1, :]
+                                occ[i_tile, lx2, 0, lz2] = True
+                # +y 邻：lj==0 -> occ[i_tile, :, B+1, :]
                 if ty + 1 < Ty_i:
                     tn = tile_id_from_coords(tx, ty + 1, tz)
                     n0 = ti.i32(tile_offsets[tn])
@@ -204,8 +207,8 @@ def filter_surface_points_tile(
                             lx2 = v[0] + 1
                             lz2 = v[2] + 1
                             if lx2 >= 1 and lx2 <= size_x and lz2 >= 1 and lz2 <= size_z:
-                                occ[lx2, size_y + 1, lz2] = True
-                # -z 邻：lk==B-1 -> occ[:,:,0]
+                                occ[i_tile, lx2, size_y + 1, lz2] = True
+                # -z 邻：lk==B-1 -> occ[i_tile, :,:,0]
                 if tz > 0:
                     tn = tile_id_from_coords(tx, ty, tz - 1)
                     n0 = ti.i32(tile_offsets[tn])
@@ -216,8 +219,8 @@ def filter_surface_points_tile(
                             lx2 = v[0] + 1
                             ly2 = v[1] + 1
                             if lx2 >= 1 and lx2 <= size_x and ly2 >= 1 and ly2 <= size_y:
-                                occ[lx2, ly2, 0] = True
-                # +z 邻：lk==0 -> occ[:,:,B+1]
+                                occ[i_tile, lx2, ly2, 0] = True
+                # +z 邻：lk==0 -> occ[i_tile, :,:,B+1]
                 if tz + 1 < Tz_i:
                     tn = tile_id_from_coords(tx, ty, tz + 1)
                     n0 = ti.i32(tile_offsets[tn])
@@ -228,39 +231,29 @@ def filter_surface_points_tile(
                             lx2 = v[0] + 1
                             ly2 = v[1] + 1
                             if lx2 >= 1 and lx2 <= size_x and ly2 >= 1 and ly2 <= size_y:
-                                occ[lx2, ly2, size_z + 1] = True
+                                occ[i_tile, lx2, ly2, size_z + 1] = True
 
             # 计算 interior（核心区域 1..size_*）
             for lx, ly, lz in ti.ndrange((1, size_x + 1), (1, size_y + 1), (1, size_z + 1)):
-                v = occ[lx, ly, lz]
-                xm = occ[lx - 1, ly, lz]
-                xp = occ[lx + 1, ly, lz]
-                ym = occ[lx, ly - 1, lz]
-                yp = occ[lx, ly + 1, lz]
-                zm = occ[lx, ly, lz - 1]
-                zp = occ[lx, ly, lz + 1]
-                interior[lx, ly, lz] = v and xm and xp and ym and yp and zm and zp
+                v = occ[i_tile, lx, ly, lz]
+                xm = occ[i_tile, lx - 1, ly, lz]
+                xp = occ[i_tile, lx + 1, ly, lz]
+                ym = occ[i_tile, lx, ly - 1, lz]
+                yp = occ[i_tile, lx, ly + 1, lz]
+                zm = occ[i_tile, lx, ly, lz - 1]
+                zp = occ[i_tile, lx, ly, lz + 1]
+                interior[i_tile, lx, ly, lz] = v and xm and xp and ym and yp and zm and zp
 
-            # 输出当前 tile 的外部点（排除内部与离散点）
+            # 输出当前 tile 的外部点
             for s in range(s0, s1):
                 v = sorted_local[s]
                 lx = v[0] + 1
                 ly = v[1] + 1
                 lz = v[2] + 1
                 if lx >= 1 and lx <= size_x and ly >= 1 and ly <= size_y and lz >= 1 and lz <= size_z:
-                    is_occ = occ[lx, ly, lz]
-                    is_interior = interior[lx, ly, lz]
-                    # 计算邻居数量，用以去除离散点
-                    n_xm = occ[lx - 1, ly, lz]
-                    n_xp = occ[lx + 1, ly, lz]
-                    n_ym = occ[lx, ly - 1, lz]
-                    n_yp = occ[lx, ly + 1, lz]
-                    n_zm = occ[lx, ly, lz - 1]
-                    n_zp = occ[lx, ly, lz + 1]
-                    neighbor_cnt = ti.cast(n_xm, ti.i32) + ti.cast(n_xp, ti.i32) + \
-                                   ti.cast(n_ym, ti.i32) + ti.cast(n_yp, ti.i32) + \
-                                   ti.cast(n_zm, ti.i32) + ti.cast(n_zp, ti.i32)
-                    if is_occ and (not is_interior) and (neighbor_cnt > 0):
+                    is_occ = occ[i_tile, lx, ly, lz]
+                    is_interior = interior[i_tile, lx, ly, lz]
+                    if is_occ and (not is_interior):
                         # 反算世界坐标：x = min + 0.5*res + (tx*B + (lx-1))*res
                         wx = aabb_min_ti[None][0] + 0.5 * res_ti[None] + ti.cast(tx * B + (lx - 1), ti.f32) * res_ti[None]
                         wy = aabb_min_ti[None][1] + 0.5 * res_ti[None] + ti.cast(ty * B + (ly - 1), ti.f32) * res_ti[None]
@@ -322,13 +315,66 @@ if __name__ == "__main__":
     print(f"Input points: {pts.shape[0]}")
     print(f"resolution={args.resolution}, aabb_min={aabb_min}, grid_size={grid_size}")
 
-    surface_pts = filter_surface_points_tile(
-        pts,
-        resolution=args.resolution,
-        aabb_min=aabb_min,
-        grid_size=grid_size,
-        tile_size=args.tile,
-    )
+    # surface_pts = filter_surface_points_tile(
+    #     pts,
+    #     resolution=args.resolution,
+    #     aabb_min=aabb_min,
+    #     grid_size=grid_size,
+    #     tile_size=args.tile,
+    #     use_halo=True,
+    # )
+    ##############################################################
+    merged_points = pts
+    resolution = args.resolution
+
+    # 分片策略：沿 z 轴将 merged_points 均匀分成 N 份，相邻分片在 z 方向重叠 3×resolution
+    # N 依据 z 方向 tile 数 Tz 估算：每片约含 4 个 z-tiles
+    start_time = time.time()
+    B = int(args.tile)
+    gz = int(grid_size[2])
+    Tz = (gz + B - 1) // B
+    tiles_per_slice = 1
+    N = max(1, int(np.ceil(Tz / tiles_per_slice)))
+
+    z_vals = merged_points[:, 2]
+    zmin_all = float(z_vals.min())
+    zmax_all = float(z_vals.max())
+    overlap = 3.0 * float(resolution)
+
+    surface_parts = []
+    for k in tqdm.trange(N):
+        base_z0 = zmin_all + (zmax_all - zmin_all) * (k / N)
+        base_z1 = zmin_all + (zmax_all - zmin_all) * ((k + 1) / N)
+        z0 = max(zmin_all, base_z0 - overlap)
+        z1 = min(zmax_all, base_z1 + overlap)
+        mask_k = (z_vals >= z0) & (z_vals <= z1)
+        part_pts = merged_points[mask_k]
+        print(part_pts.shape)
+        if part_pts.shape[0] == 0:
+            continue
+        sub_surface = filter_surface_points_tile(
+            part_pts,
+            resolution=args.resolution,
+            aabb_min=aabb_min,
+            grid_size=grid_size,
+            tile_size=args.tile,
+        )
+        if sub_surface is not None and sub_surface.size > 0:
+            surface_parts.append(sub_surface)
+
+    if len(surface_parts) == 0:
+        surface_pts = np.empty((0, 3), dtype=np.float32)
+    else:
+        surface_concat = np.concatenate(surface_parts, axis=0)
+        # 拼接后的整体再执行一次全局过滤，去除跨分片边界处的内部点/离散点
+        surface_pts = filter_surface_points_tile(
+            surface_concat,
+            resolution=args.resolution,
+            aabb_min=aabb_min,
+            grid_size=grid_size,
+            tile_size=args.tile,
+        )
+    ##############################################################
 
     print(f"Surface points: {surface_pts.shape[0]}")
     out_path = os.path.splitext(args.npy)[0] + f"_surface.npy"

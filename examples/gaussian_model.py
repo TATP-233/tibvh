@@ -149,7 +149,7 @@ def decode_supersplat_ply(plydata):
     return positions, quats, scales, colors, opacities
 
 # ================== 数据加载 ==================
-def load_gaussians(ply_path, cutoff=3.0, verbose=False):
+def load_gaussians(ply_path, cutoff=3.0, max_det=0.5, verbose=False):
     """
     从PLY文件加载3D高斯模型
     
@@ -183,6 +183,15 @@ def load_gaussians(ply_path, cutoff=3.0, verbose=False):
         quats = np.stack([vertex[f'rot_{i}'] for i in range(4)], axis=-1).astype(np.float32)  # 旋转四元数 wxyz
         scales = np.exp(np.stack([vertex[p] for p in scale_properties], axis=-1).astype(np.float32))  # 尺度
         opacities = (1./(1.+np.exp(-vertex['opacity']))).astype(np.float32) # 不透明度
+
+    # 过滤过大的高斯体
+    scale_det = np.abs(scales[:, 0] * scales[:, 1] * scales[:, 2])
+    valid_args = (scale_det < max_det)
+    positions = positions[valid_args]
+    quats = quats[valid_args]
+    scales = scales[valid_args]
+    opacities = opacities[valid_args]
+    print(f"过滤掉过大高斯体: {np.sum(~valid_args)} / {len(valid_args)}")
 
     if is_2dgs:
         scales = np.hstack([scales, 1e-9*np.ones_like(scales[:, :1])])
@@ -246,5 +255,9 @@ def load_gaussians(ply_path, cutoff=3.0, verbose=False):
     # 如果是2DGS，设置预计算的椭圆参数
     if is_2dgs:
         gaussians.normal.from_numpy(normals.astype(np.float32))
+
+    # 限制max_det，如果超过这个范围的gaossians会被过滤掉
+    if max_det > 0:
+        pass
     
     return gaussians, is_2dgs
