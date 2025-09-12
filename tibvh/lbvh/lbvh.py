@@ -31,7 +31,7 @@ class LBVH:
         max_stack_depth (int): 最大栈深度
     """
     
-    def __init__(self, aabb_manager: AABB, profiling: bool = False):
+    def __init__(self, aabb_manager: AABB, max_candidates: int = 32, profiling: bool = False):
         """
         初始化Linear BVH
         
@@ -39,6 +39,9 @@ class LBVH:
             aabb_manager: AABB管理器
             profiling: 是否启用性能统计
         """
+
+        self.max_candidates = max_candidates
+
         self.aabb_manager = aabb_manager
         self.max_aabbs = aabb_manager.max_n_aabbs
         self.n_aabbs = 0
@@ -48,7 +51,7 @@ class LBVH:
         self.timing_stats = {} if profiling else None
         
         # 查询相关配置
-        self.max_stack_depth = 64
+        self.max_stack_depth = 128
         
         # AABB中心点和场景边界
         self.aabb_centers = ti.Vector.field(3, ti.f32, shape=self.max_aabbs)
@@ -428,56 +431,6 @@ class LBVH:
 
         return has_more_layers == 0
     
-    @ti.func
-    def ray_bvh_traversal(self, ray_start: ti.types.vector(3, ti.f32),
-                         ray_direction: ti.types.vector(3, ti.f32)) -> ti.i32:
-        """
-        射线-BVH遍历查找最近交点
-        
-        Args:
-            ray_start: 射线起点
-            ray_direction: 射线方向
-            
-        Returns:
-            hit_element_id: 最近交点的元素ID，-1表示未命中
-        """
-        # 初始化结果
-        hit_element_id = -1
-
-        if self.n_aabbs > 0:
-            # 使用栈进行深度优先遍历
-            stack = ti.Vector.zero(ti.i32, self.max_stack_depth)
-            stack_depth = 1
-            stack[ti.i32(0)] = 0  # 从根节点开始
-            
-            min_distance = 1e10
-            
-            while stack_depth > 0:
-                stack_depth -= 1
-                node_idx = stack[ti.i32(stack_depth)]
-                
-                # 射线-AABB相交测试
-                t = self.ray_node_intersect(ray_start, ray_direction, node_idx)
-                
-                if t >= 0 and t < min_distance:
-                    # 检查是否为叶子节点
-                    if self.nodes[node_idx].left == -1 and self.nodes[node_idx].right == -1:
-                        # 叶子节点：返回element_id用于后续精确相交测试
-                        element_id = self.nodes[node_idx].element_id
-                        if element_id >= 0:
-                            min_distance = t
-                            hit_element_id = element_id
-                    else:
-                        # 内部节点：压栈子节点
-                        if self.nodes[node_idx].right != -1 and stack_depth < self.max_stack_depth:
-                            stack[ti.i32(stack_depth)] = self.nodes[node_idx].right
-                            stack_depth += 1
-                        if self.nodes[node_idx].left != -1 and stack_depth < self.max_stack_depth:
-                            stack[ti.i32(stack_depth)] = self.nodes[node_idx].left
-                            stack_depth += 1
-
-        return hit_element_id
-    
     @ti.func 
     def collect_intersecting_elements(self, 
                                     ray_start: ti.types.vector(3, ti.f32),
@@ -493,9 +446,7 @@ class LBVH:
         Returns:
             (leaf_indices, leaf_distances, leaf_count): 候选节点ID数组和数量
         """
-        MAX_CANDIDATES = 32
-
-        candidates = ti.Vector([-1]*32, ti.i32)  # 叶节点索引数组 MAX_CANDIDATES
+        candidates = ti.Vector([-1]*self.max_candidates, ti.i32)  # 叶节点索引数组
         candidate_count = 0
         
         if self.n_aabbs > 0:
@@ -504,7 +455,7 @@ class LBVH:
             stack_depth = 1
             stack[0] = 0  # 从根节点开始
             
-            while stack_depth > 0 and candidate_count < MAX_CANDIDATES:
+            while stack_depth > 0 and candidate_count < self.max_candidates:
                 stack_depth -= 1
                 node_idx = stack[stack_depth]
                 
