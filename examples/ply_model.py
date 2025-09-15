@@ -31,11 +31,16 @@ def xyz2ply(grids, output_ply):
         arr.tofile(f)
     print("Saved binary ply:", output_ply)
 
-def xyz2supersplat(grids, output_ply, base_scale):
+def xyz2supersplat(grids, output_ply, base_scale, colors=None):
     positions = grids[:, :3].astype(np.float32)
     N = int(positions.shape[0])
 
-    _rgb = np.random.random((N, 3)).astype(np.float32)
+    if colors is None:
+        _rgb = np.random.random((N, 3)).astype(np.float32)
+    else:
+        _rgb = np.asarray(colors, dtype=np.float32)
+        if _rgb.shape[0] != N:
+            raise ValueError('colors length does not match number of points')
     shs = RGB2SH(_rgb)
 
     opa_ = np.ones(N, dtype=np.float32)

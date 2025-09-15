@@ -27,8 +27,8 @@ def opacity_func(x):
     # 将透明的物体尽量映射到 0
 
     # return x
-    return x ** 2
-    # return x ** 4
+    # return x ** 2
+    return x ** 4
 
 @ti.func
 def gaussian_density(pos:ti.types.vector(3, ti.f32), gaussian:Gaussian):
@@ -196,4 +196,76 @@ if __name__ == "__main__":
     np.save(output_file, surface_pts)
     print(f"保存表面点数据到 {output_file}")
     xyz2ply(surface_pts, os.path.join(output_path, "surface_points_bin.ply"))
-    xyz2supersplat(surface_pts, os.path.join(output_path, "surface_points_supersplat.ply"), base_scale=resolution)
+
+    # map surface points to gaussian AABB indices and derive colors per-point
+    try:
+        total_sp = surface_pts.shape[0]
+        voxel_batch_size = 2**20 if total_sp > (1<<20) else total_sp
+        sp_ti = ti.Vector.field(3, dtype=ti.f32, shape=voxel_batch_size)
+        sp_to_aabb = ti.field(dtype=ti.i32, shape=voxel_batch_size)
+
+        @ti.kernel
+        def map_surface(batch_size: int):
+            for i in range(batch_size):
+                sp_to_aabb[i] = -1
+            _ = lbvh.query(sp_ti)
+            for k in range(lbvh.query_result_count[None]):
+                aid = lbvh.query_result[k][0]
+                qid = lbvh.query_result[k][1]
+                if 0 <= qid < batch_size and sp_to_aabb[qid] == -1:
+                    sp_to_aabb[qid] = aid
+
+        # attempt to read SH colors from PLY
+        sh_colors = None
+        try:
+            import plyfile
+            plydata = plyfile.PlyData.read(ply_file)
+            if 'chunk' not in plydata:
+                vtx = plydata['vertex']
+                if all(k in vtx.data.dtype.names for k in ('f_dc_0', 'f_dc_1', 'f_dc_2')):
+                    f0 = vtx['f_dc_0'].astype(np.float32)
+                    f1 = vtx['f_dc_1'].astype(np.float32)
+                    f2 = vtx['f_dc_2'].astype(np.float32)
+                    SH = np.stack([f0, f1, f2], axis=1)
+                    C0 = 0.28209479177387814
+                    rgb = SH * C0 + 0.5
+                    rgb = np.clip(rgb, 0.0, 1.0)
+                    scale_props = [p.name for p in vtx.properties if p.name.startswith('scale_')]
+                    if len(scale_props) > 0:
+                        pscale = np.stack([vtx[p] for p in scale_props], axis=1).astype(np.float32)
+                        scales_tmp = np.exp(pscale)
+                        scale_det = np.abs(scales_tmp[:,0] * scales_tmp[:,1] * scales_tmp[:,2])
+                        valid_args = (scale_det < 0.5)
+                        rgb = rgb[valid_args]
+                    sh_colors = rgb
+        except Exception:
+            sh_colors = None
+
+        sp_colors = np.zeros((total_sp, 3), dtype=np.float32)
+        for i in range((total_sp + voxel_batch_size - 1) // voxel_batch_size):
+            s = i * voxel_batch_size
+            e = min((i + 1) * voxel_batch_size, total_sp)
+            cur = e - s
+            upload = np.zeros((voxel_batch_size, 3), dtype=np.float32)
+            upload[:cur] = surface_pts[s:e]
+            sp_ti.from_numpy(upload)
+            map_surface(cur)
+            ti.sync()
+            aabb_map = sp_to_aabb.to_numpy()[:cur]
+            for j in range(cur):
+                aid = int(aabb_map[j])
+                if aid >= 0 and sh_colors is not None and aid < sh_colors.shape[0]:
+                    sp_colors[s + j] = sh_colors[aid]
+                elif aid >= 0:
+                    hashv = (aid * 1664525) & 0xFFFFFFFF
+                    r = ((hashv >> 0) & 0xFF) / 255.0
+                    g = ((hashv >> 8) & 0xFF) / 255.0
+                    b = ((hashv >> 16) & 0xFF) / 255.0
+                    sp_colors[s + j] = [r, g, b]
+                else:
+                    sp_colors[s + j] = [0.7, 0.7, 0.7]
+
+        xyz2supersplat(surface_pts, os.path.join(output_path, "surface_points_supersplat.ply"), base_scale=resolution, colors=sp_colors)
+    except Exception as e:
+        print("Failed to compute per-surface colors, falling back to random: ", e)
+        xyz2supersplat(surface_pts, os.path.join(output_path, "surface_points_supersplat.ply"), base_scale=resolution)
