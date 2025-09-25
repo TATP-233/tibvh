@@ -216,3 +216,11 @@ def compute_box_aabb(position: ti.types.vector(3, ti.f32),
         aabb_max = ti.max(aabb_max, world_vertex)
     
     return aabb_min, aabb_max
+
+@ti.func
+def aabb_local2wolrd(aabb_center:ti.types.vector(3, ti.f32), 
+                     aabb_size:ti.types.vector(3, ti.f32), 
+                     position:ti.types.vector(3, ti.f32), 
+                     rotation:ti.types.matrix(3, 3, ti.f32)):
+    aabb_min, aabb_max = compute_box_aabb(position, rotation, aabb_size)
+    return aabb_min + aabb_center, aabb_max + aabb_center

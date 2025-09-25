@@ -10,7 +10,8 @@ from .aabb_generator import (
     compute_capsule_aabb,
     compute_ellipsoid_aabb,
     compute_cylinder_aabb,
-    compute_box_aabb
+    compute_box_aabb,
+    aabb_local2wolrd
 )
 
 from .geom_intersection import (
@@ -42,6 +43,7 @@ __all__ = [
     "compute_ellipsoid_aabb",
     "compute_cylinder_aabb",
     "compute_box_aabb",
+    "aabb_local2wolrd"
 
     # Ray-geometry intersection functions
     "ray_geom_intersection",
