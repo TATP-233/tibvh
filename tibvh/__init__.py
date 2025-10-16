@@ -16,7 +16,7 @@ from .geometry import (
 )
 
 # Version information
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "TIBVH Contributors"
 __email__ = "jyf23@mails.tsinghua.edu.cn"
 

@@ -222,5 +222,8 @@ def aabb_local2wolrd(aabb_center:ti.types.vector(3, ti.f32),
                      aabb_size:ti.types.vector(3, ti.f32), 
                      position:ti.types.vector(3, ti.f32), 
                      rotation:ti.types.matrix(3, 3, ti.f32)):
-    aabb_min, aabb_max = compute_box_aabb(position, rotation, aabb_size)
-    return aabb_min + aabb_center, aabb_max + aabb_center
+    # 将local坐标系中的AABB转换到world坐标系
+    # 先计算local坐标系下的实际位置，再应用旋转和平移
+    local_position = position + rotation @ aabb_center
+    aabb_min, aabb_max = compute_box_aabb(local_position, rotation, aabb_size)
+    return aabb_min, aabb_max
